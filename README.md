@@ -2,7 +2,7 @@
 
 本仓库 fork 自[AntonVanke/MicroPython-uFont](https://github.com/AntonVanke/MicroPython-uFont)并进行了一些优化。
 
-Micropython 的字体模块，可以用来显示所有`Unicode`字符。
+Micropython 的字体模块，可以用来显示 UTF16 编码的`Unicode`字符。
 
 ## 硬件要求
 
@@ -19,7 +19,7 @@ Micropython 的字体模块，可以用来显示所有`Unicode`字符。
 直接使用 `io.BufferedReader.readinto` 函数，把文件数据读取到单字帧缓存`bytearray`中，而不是和原版函数一样先创建一个`bytes`对象再返回，减少内存分配。
 
 ```python
-def Fast_get_bitmap(self, word: str, buff: bytearray):
+def fast_get_bitmap(self, word: str, buff: bytearray):
     pass
 ```
 
@@ -37,15 +37,15 @@ def Fast_get_bitmap(self, word: str, buff: bytearray):
 
 ### 速度对比
 
-#### \_get_index 与 \_Fast_get_index
+#### \_get_index 与 \_fast_get_index
 
 在执行垃圾回收后，不启用内存索引的情况下分别启用/关闭分块索引来执行这两个函数，查询字符索引。
 
 ```python
 # 16x16字体，每个字体数据大小32字节
-WordCache = bytearray(32)
-for Char in "你好世界,hello,world!":
-    Font.Fast_get_bitmap(Char, WordCache)
+word_cache = bytearray(32)
+for char in "你好世界,hello,world!":
+    font.fast_get_bitmap(char, word_cache)
     pass
 
 ```
