@@ -10,6 +10,7 @@ import utime
 import struct
 import gc
 import framebuf, micropython
+from math import ceil
 
 DEBUG = True
 
@@ -95,6 +96,8 @@ class BMFont:
         """
         # 如果没有指定字号则使用默认字号
         font_size = font_size or self.font_size
+        # 与默认字号不同的字号将引发放缩
+        font_resize = font_size != self.font_size
         # 记录初始的 x 位置
         initial_x = x
 
@@ -121,30 +124,30 @@ class BMFont:
         except AttributeError:
             print("请自行调用 display.fill() 清屏")
 
-        for char in range(len(string)):
+        # 点阵缓存
+        bitmap_cache = self.bitmap_cache or bytearray(
+            ceil(self.font_size * self.font_size / 8)
+        )
+
+        for char in string:
             if auto_wrap and (
-                (
-                    x + font_size // 2 > display.width
-                    and ord(string[char]) < 128
-                    and half_char
-                )
+                (x + font_size // 2 > display.width and ord(char) < 128 and half_char)
                 or (
-                    x + font_size > display.width
-                    and (not half_char or ord(string[char]) > 128)
+                    x + font_size > display.width and (not half_char or ord(char) > 128)
                 )
             ):
                 y += font_size + line_spacing
                 x = initial_x
 
             # 对控制字符的处理
-            if string[char] == "\n":
+            if char == "\n":
                 y += font_size + line_spacing
                 x = initial_x
                 continue
-            elif string[char] == "\t":
+            elif char == "\t":
                 x = ((x // font_size) + 1) * font_size + initial_x % font_size
                 continue
-            elif ord(string[char]) < 16:
+            elif ord(char) < 16:
                 continue
 
             # 超过范围的字符不会显示*
@@ -152,19 +155,22 @@ class BMFont:
                 continue
 
             # 获取字体的点阵数据
-            byte_data = list(self.get_bitmap(string[char]))
+            self.fast_get_bitmap(char, bitmap_cache)
 
             # 分四种情况逐个优化
-            #   1. 黑白屏幕/无放缩
-            #   2. 黑白屏幕/放缩
-            #   3. 彩色屏幕/无放缩
-            #   4. 彩色屏幕/放缩
+            #   1. 黑白屏幕/放缩
+            #   2. 黑白屏幕/无放缩
+            #   3. 彩色屏幕/放缩
+            #   4. 彩色屏幕/无放缩
             if color_type == 0:
-                byte_data = self._reverse_byte_data(byte_data) if reverse else byte_data
-                if font_size == self.font_size:
+                if reverse:
+                    self._reverse_byte_data(bitmap_cache)
+                if font_resize:
                     display.blit(
                         framebuf.FrameBuffer(
-                            bytearray(byte_data),
+                            self._hlsb_font_size(
+                                bitmap_cache, font_size, self.font_size
+                            ),
                             font_size,
                             font_size,
                             framebuf.MONO_HLSB,
@@ -176,7 +182,7 @@ class BMFont:
                 else:
                     display.blit(
                         framebuf.FrameBuffer(
-                            self._hlsb_font_size(byte_data, font_size, self.font_size),
+                            bitmap_cache,
                             font_size,
                             font_size,
                             framebuf.MONO_HLSB,
@@ -185,79 +191,41 @@ class BMFont:
                         y,
                         alpha_color,
                     )
-            elif color_type == 1 and font_size == self.font_size:
-                display.blit(
-                    framebuf.FrameBuffer(
-                        self._flatten_byte_data(byte_data, palette),
-                        font_size,
-                        font_size,
-                        framebuf.RGB565,
-                    ),
-                    x,
-                    y,
-                    alpha_color,
-                )
-            elif color_type == 1 and font_size != self.font_size:
-                display.blit(
-                    framebuf.FrameBuffer(
-                        self._rgb565_font_size(
-                            byte_data, font_size, palette, self.font_size
+            elif color_type == 1:
+                if font_resize:
+                    display.blit(
+                        framebuf.FrameBuffer(
+                            self._rgb565_font_size(
+                                bitmap_cache, font_size, palette, self.font_size
+                            ),
+                            font_size,
+                            font_size,
+                            framebuf.RGB565,
                         ),
-                        font_size,
-                        font_size,
-                        framebuf.RGB565,
-                    ),
-                    x,
-                    y,
-                    alpha_color,
-                )
+                        x,
+                        y,
+                        alpha_color,
+                    )
+                else:
+                    display.blit(
+                        framebuf.FrameBuffer(
+                            self._flatten_byte_data(bitmap_cache, palette),
+                            font_size,
+                            font_size,
+                            framebuf.RGB565,
+                        ),
+                        x,
+                        y,
+                        alpha_color,
+                    )
+
             # 英文字符半格显示
-            if ord(string[char]) < 128 and half_char:
+            if half_char and ord(char) < 128:
                 x += font_size // 2
             else:
                 x += font_size
 
         display.show() if show else 0
-
-    @micropython.native
-    @timed_function
-    def _get_index(self, word: str) -> int:
-        """
-        获取索引
-        Args:
-            word: 字符
-
-        Returns:
-        ESP32-C3: Function _get_index Time =  2.670ms
-        """
-        word_code = ord(word)
-        start = 0x10
-        end = self.start_bitmap
-        if not self.enable_mem_index:
-            while start <= end:
-                mid = ((start + end) // 4) * 2
-                self.font.seek(mid, 0)
-                target_code = struct.unpack(">H", self.font.read(2))[0]
-                if word_code == target_code:
-                    return (mid - 0x10) >> 1
-                elif word_code < target_code:
-                    end = mid - 2
-                else:
-                    start = mid + 2
-        else:
-            Cache = self.FontIndexCache
-            start = 0
-            end = (end - 0x10) // 2
-            while start <= end:
-                mid = (start + end) // 2
-                target_code = Cache[mid]
-                if word_code == target_code:
-                    return mid
-                elif word_code < target_code:
-                    end = mid - 1
-                else:
-                    start = mid + 1
-        return -1
 
     @micropython.native
     @timed_function
@@ -272,23 +240,14 @@ class BMFont:
         word_code = ord(word)
         start = 0x10
         end = self.start_bitmap
-        for i, begin_end in enumerate(self.unicode_block_boundary):
-            if begin_end[0] <= word_code <= begin_end[1] and self.block_boundary[i]:
-                start, end = self.block_boundary[i]
-                break
+        if self.enable_block_index:
+            for i, begin_end in enumerate(self.unicode_block_boundary):
+                if begin_end[0] <= word_code <= begin_end[1] and self.block_boundary[i]:
+                    start, end = self.block_boundary[i]
+                    break
 
-        if not self.enable_mem_index:
-            while start <= end:
-                mid = ((start + end) // 4) * 2
-                self.font.seek(mid, 0)
-                target_code = struct.unpack(">H", self.font.read(2))[0]
-                if word_code == target_code:
-                    return (mid - 0x10) >> 1
-                elif word_code < target_code:
-                    end = mid - 2
-                else:
-                    start = mid + 2
-        else:
+        # 二分法查询
+        if self.enable_mem_index:
             Cache = self.FontIndexCache
             start = (start - 0x10) // 2
             end = (end - 0x10) // 2
@@ -301,10 +260,20 @@ class BMFont:
                     end = mid - 1
                 else:
                     start = mid + 1
+        else:
+            while start <= end:
+                mid = ((start + end) // 4) * 2
+                self.font.seek(mid, 0)
+                target_code = struct.unpack(">H", self.font.read(2))[0]
+                if word_code == target_code:
+                    return (mid - 0x10) >> 1
+                elif word_code < target_code:
+                    end = mid - 2
+                else:
+                    start = mid + 2
         return -1
 
     # @timed_function
-    # 不理解为什么类型提示为bytearray?明明调用的地方是传入list
     def _hlsb_font_size(
         self, byte_data: bytearray, new_size: int, old_size: int
     ) -> bytearray:
@@ -325,7 +294,6 @@ class BMFont:
         return _temp
 
     # @timed_function
-    # 不理解为什么类型提示为bytearray?明明调用的地方是传入list
     def _rgb565_font_size(
         self, byte_data: bytearray, new_size: int, palette: list, old_size: int
     ) -> bytearray:
@@ -363,42 +331,15 @@ class BMFont:
         return bytearray(_temp)
 
     # @timed_function
-    # 不理解为什么类型提示为bytearray?明明调用的地方是传入list
-    def _reverse_byte_data(self, _byte_data: bytearray) -> bytearray:
+    def _reverse_byte_data(self, _byte_data: bytearray):
         for _pixel in range(len(_byte_data)):
             _byte_data[_pixel] = ~_byte_data[_pixel] & 0xFF
-        return _byte_data
 
-    @micropython.native
-    @timed_function
-    def get_bitmap(self, word: str) -> bytes:
-        """获取点阵数据
-
-        Args:
-            word: 字符
-
-        Returns:
-            bytes 字符点阵
-        """
-        index = self._get_index(word)
-        if index == -1:
-            return (
-                b"\xff\xff\xff\xff\xff\xff\xff\xff\xf0\x0f\xcf\xf3\xcf\xf3\xff\xf3\xff\xcf\xff?\xff?\xff\xff\xff"
-                b"?\xff?\xff\xff\xff\xff"
-            )
-
-        self.font.seek(self.start_bitmap + index * self.bitmap_size, 0)
-        return self.font.read(self.bitmap_size)
-
-    @micropython.native
+    # @micropython.native
     # @timed_function
     def fast_get_bitmap(self, word: str, buff: bytearray):
         """获取点阵数据"""
-        index = 0
-        if self.enable_block_index:
-            index = self._fast_get_index(word)
-        else:
-            index = self._get_index(word)
+        index = self._fast_get_index(word)
         if index == -1:
             buff[0:31] = (
                 b"\xff\xff\xff\xff\xff\xff\xff\xff\xf0\x0f\xcf\xf3\xcf\xf3\xff\xf3\xff\xcf\xff?\xff?\xff\xff\xff"
@@ -409,12 +350,19 @@ class BMFont:
         self.font.seek(self.start_bitmap + index * self.bitmap_size, 0)
         self.font.readinto(buff)
 
-    def __init__(self, font_file, enable_mem_index=False, enable_block_index=False):
+    def __init__(
+        self,
+        font_file,
+        enable_mem_index=False,
+        enable_block_index=False,
+        enable_bitmap_cache=False,
+    ):
         """
         Args:
             font_file: 字体文件路径
             enable_mem_index: 启用内存索引，将索引信息全部载入内存，更快速，每个索引2字节，内存小的机器慎用
             enable_block_index: 启用分块索引，根据unicode区段，先进行分块，初始化时间较长
+            enable_bitmap_cache: 启用点阵缓存，在类成员中申请bytearray对象，避免频繁创建
         """
         self.font_file = font_file
         # 载入字体文件
@@ -452,6 +400,12 @@ class BMFont:
         #   用来定位字体数据位置
         self.bitmap_size = self.bmf_info[8]
 
+        # 点阵数据缓存
+        if enable_bitmap_cache:
+            self.bitmap_cache = bytearray(ceil(self.font_size * self.font_size / 8))
+        else:
+            self.bitmap_cache = None
+
         # 建立内存索引
         word_num = (self.start_bitmap - 16) // 2
         self.enable_mem_index = enable_mem_index
@@ -484,9 +438,9 @@ class BMFont:
                     not_eof = False
                 tmp = struct.unpack(f">{len_//2}H", self.font.read(len_))
                 for i, word_code in enumerate(tmp):
-                    # 满足分块并且是第一个 就记录此时索引
-                    # 如果不满足分块并且已经找出了第一个索引，就记录此时索引
-                    # 如果不满足分块但没找到第一个索引，就把此时索引记录为第一个
+                    # 注意：字体文件索引空间是线性的
+                    # 第一次满足分块 就记录此时索引为分块起始索引
+                    # 直到找到不满足分块的 记录索引为分块结束索引，然后找到其他分块的索引
                     for j, b_be in enumerate(bb):
                         if b_be[0] <= word_code <= b_be[1]:
                             if find_start:
