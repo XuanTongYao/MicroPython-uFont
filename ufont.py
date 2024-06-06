@@ -86,7 +86,7 @@ class BMFont:
             show: 实时显示
             clear: 清除之前显示内容
             alpha_color: 透明色(RGB565) 当颜色与 alpha_color 相同时则透明
-            reverse: 逆置(MONO)
+            reverse: 反色(MONO)
             color_type: 色彩模式 0:MONO 1:RGB565
             line_spacing: 行间距
             **kwargs:
@@ -101,10 +101,15 @@ class BMFont:
         # 记录初始的 x 位置
         initial_x = x
 
+        # 调色板缓存
+        palette_cache = None
         # 设置颜色类型
         if color_type == -1 and (display.width * display.height) > len(display.buffer):
             color_type = 0
         elif color_type == -1 or color_type == 1:
+            palette_cache = framebuf.FrameBuffer(bytearray(4), 2, 1, framebuf.RGB565)
+            palette_cache.pixel(0, 0, bg_color)
+            palette_cache.pixel(1, 0, color)
             palette = [
                 [bg_color & 0xFF, (bg_color & 0xFF00) >> 8],
                 [color & 0xFF, (color & 0xFF00) >> 8],
@@ -113,10 +118,13 @@ class BMFont:
 
         # 处理黑白屏幕的背景反转问题
         if color_type == 0 and color == 0 != bg_color or color_type == 0 and reverse:
-            reverse = True
+            # 背景反转(反色)直接反转调色板的颜色就行
+            palette_cache = framebuf.FrameBuffer(bytearray(2), 2, 1, framebuf.MONO_HLSB)
+            palette_cache.pixel(0, 0, 1)
             alpha_color = -1
         else:
-            reverse = False
+            palette_cache = framebuf.FrameBuffer(bytearray(2), 2, 1, framebuf.MONO_HLSB)
+            palette_cache.pixel(1, 0, 1)
 
         # 清屏
         try:
@@ -163,8 +171,6 @@ class BMFont:
             #   3. 彩色屏幕/放缩
             #   4. 彩色屏幕/无放缩
             if color_type == 0:
-                if reverse:
-                    self._reverse_byte_data(bitmap_cache)
                 if font_resize:
                     display.blit(
                         framebuf.FrameBuffer(
@@ -178,6 +184,7 @@ class BMFont:
                         x,
                         y,
                         alpha_color,
+                        palette_cache,
                     )
                 else:
                     display.blit(
@@ -190,6 +197,7 @@ class BMFont:
                         x,
                         y,
                         alpha_color,
+                        palette_cache,
                     )
             elif color_type == 1:
                 if font_resize:
@@ -209,14 +217,12 @@ class BMFont:
                 else:
                     display.blit(
                         framebuf.FrameBuffer(
-                            self._flatten_byte_data(bitmap_cache, palette),
-                            font_size,
-                            font_size,
-                            framebuf.RGB565,
+                            bitmap_cache, font_size, font_size, framebuf.RGB565
                         ),
                         x,
                         y,
                         alpha_color,
+                        palette_cache,
                     )
 
             # 英文字符半格显示
@@ -311,29 +317,6 @@ class BMFont:
                     palette[byte_data[_old_index // 8] >> (7 - _old_index % 8) & 1]
                 )
         return bytearray(_temp)
-
-    # @timed_function
-    # 不理解为什么类型提示为bytearray?明明调用的地方是传入list
-    def _flatten_byte_data(self, _byte_data: bytearray, palette: list) -> bytearray:
-        """
-        渲染彩色像素
-        Args:
-            _byte_data:
-            palette:
-
-        Returns:
-
-        """
-        _temp = []
-        for _byte in _byte_data:
-            for _b in range(7, -1, -1):
-                _temp.extend(palette[(_byte >> _b) & 0x01])
-        return bytearray(_temp)
-
-    # @timed_function
-    def _reverse_byte_data(self, _byte_data: bytearray):
-        for _pixel in range(len(_byte_data)):
-            _byte_data[_pixel] = ~_byte_data[_pixel] & 0xFF
 
     # @micropython.native
     # @timed_function
