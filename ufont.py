@@ -94,6 +94,9 @@ class BMFont:
         Returns:
         MoreInfo: https://github.com/AntonVanke/MicroPython-uFont/blob/master/README.md
         """
+        width = display.width
+        height = display.height
+
         # 如果没有指定字号则使用默认字号
         font_size = font_size or self.font_size
         # 与默认字号不同的字号将引发放缩
@@ -104,7 +107,8 @@ class BMFont:
         # 调色板缓存
         palette_cache = None
         # 设置颜色类型
-        if color_type == -1 and (display.width * display.height) > len(display.buffer):
+        if color_type == -1 and (width * height) > len(display.buffer):
+            # 自动判断颜色类型
             color_type = 0
         elif color_type == -1 or color_type == 1:
             palette_cache = framebuf.FrameBuffer(bytearray(4), 2, 1, framebuf.RGB565)
@@ -122,7 +126,7 @@ class BMFont:
             palette_cache = framebuf.FrameBuffer(bytearray(2), 2, 1, framebuf.MONO_HLSB)
             palette_cache.pixel(0, 0, 1)
             alpha_color = -1
-        else:
+        elif color_type == 0:
             palette_cache = framebuf.FrameBuffer(bytearray(2), 2, 1, framebuf.MONO_HLSB)
             palette_cache.pixel(1, 0, 1)
 
@@ -139,10 +143,8 @@ class BMFont:
 
         for char in string:
             if auto_wrap and (
-                (x + font_size // 2 > display.width and ord(char) < 128 and half_char)
-                or (
-                    x + font_size > display.width and (not half_char or ord(char) > 128)
-                )
+                (x + font_size // 2 > width and ord(char) < 128 and half_char)
+                or (x + font_size > width and (not half_char or ord(char) > 128))
             ):
                 y += font_size + line_spacing
                 x = initial_x
@@ -159,7 +161,7 @@ class BMFont:
                 continue
 
             # 超过范围的字符不会显示*
-            if x > display.width or y > display.height:
+            if x > width or y > height:
                 continue
 
             # 获取字体的点阵数据
@@ -217,7 +219,7 @@ class BMFont:
                 else:
                     display.blit(
                         framebuf.FrameBuffer(
-                            bitmap_cache, font_size, font_size, framebuf.RGB565
+                            bitmap_cache, font_size, font_size, framebuf.MONO_HLSB
                         ),
                         x,
                         y,
@@ -234,7 +236,7 @@ class BMFont:
         display.show() if show else 0
 
     @micropython.native
-    @timed_function
+    # @timed_function
     def _fast_get_index(self, word: str) -> int:
         """
         获取索引，利用分块加速二分收敛速度
@@ -254,12 +256,12 @@ class BMFont:
 
         # 二分法查询
         if self.enable_mem_index:
-            Cache = self.FontIndexCache
+            cache = self.FontIndexCache
             start = (start - 0x10) // 2
             end = (end - 0x10) // 2
             while start <= end:
                 mid = (start + end) // 2
-                target_code = Cache[mid]
+                target_code = cache[mid]
                 if word_code == target_code:
                     return mid
                 elif word_code < target_code:
@@ -283,16 +285,16 @@ class BMFont:
     def _hlsb_font_size(
         self, byte_data: bytearray, new_size: int, old_size: int
     ) -> bytearray:
-        old_size = old_size
+        # 原作者没说new_size / old_size的作用，我猜测是缩放比例
+        scale = new_size / old_size
         _temp = bytearray(new_size * ((new_size >> 3) + 1))
         _new_index = -1
         for _col in range(new_size):
+            col_factor = int(_col / scale) * old_size
             for _row in range(new_size):
                 if (_row % 8) == 0:
                     _new_index += 1
-                _old_index = int(_col / (new_size / old_size)) * old_size + int(
-                    _row / (new_size / old_size)
-                )
+                _old_index = col_factor + int(_row / scale)
                 _temp[_new_index] = _temp[_new_index] | (
                     (byte_data[_old_index >> 3] >> (7 - _old_index % 8) & 1)
                     << (7 - _row % 8)
@@ -303,16 +305,15 @@ class BMFont:
     def _rgb565_font_size(
         self, byte_data: bytearray, new_size: int, palette: list, old_size: int
     ) -> bytearray:
-        old_size = old_size
+        scale = new_size / old_size
         _temp = []
         _new_index = -1
         for _col in range(new_size):
+            col_factor = int(_col / scale) * old_size
             for _row in range(new_size):
                 if (_row % 8) == 0:
                     _new_index += 1
-                _old_index = int(_col / (new_size / old_size)) * old_size + int(
-                    _row / (new_size / old_size)
-                )
+                _old_index = col_factor + int(_row / scale)
                 _temp.extend(
                     palette[byte_data[_old_index // 8] >> (7 - _old_index % 8) & 1]
                 )
