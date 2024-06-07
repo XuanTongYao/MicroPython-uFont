@@ -104,31 +104,27 @@ class BMFont:
         # 记录初始的 x 位置
         initial_x = x
 
-        # 调色板缓存
-        palette_cache = None
+        # 调色板
+        palette = None
         # 设置颜色类型
         if color_type == -1 and (width * height) > len(display.buffer):
             # 自动判断颜色类型
             color_type = 0
         elif color_type == -1 or color_type == 1:
-            palette_cache = framebuf.FrameBuffer(bytearray(4), 2, 1, framebuf.RGB565)
-            palette_cache.pixel(0, 0, bg_color)
-            palette_cache.pixel(1, 0, color)
-            palette = [
-                [bg_color & 0xFF, (bg_color & 0xFF00) >> 8],
-                [color & 0xFF, (color & 0xFF00) >> 8],
-            ]
+            palette = framebuf.FrameBuffer(bytearray(4), 2, 1, framebuf.RGB565)
+            palette.pixel(0, 0, bg_color)
+            palette.pixel(1, 0, color)
             color_type = 1
 
         # 处理黑白屏幕的背景反转问题
         if color_type == 0 and color == 0 != bg_color or color_type == 0 and reverse:
             # 背景反转(反色)直接反转调色板的颜色就行
-            palette_cache = framebuf.FrameBuffer(bytearray(2), 2, 1, framebuf.MONO_HLSB)
-            palette_cache.pixel(0, 0, 1)
+            palette = framebuf.FrameBuffer(bytearray(2), 2, 1, framebuf.MONO_HLSB)
+            palette.pixel(0, 0, 1)
             alpha_color = -1
         elif color_type == 0:
-            palette_cache = framebuf.FrameBuffer(bytearray(2), 2, 1, framebuf.MONO_HLSB)
-            palette_cache.pixel(1, 0, 1)
+            palette = framebuf.FrameBuffer(bytearray(2), 2, 1, framebuf.MONO_HLSB)
+            palette.pixel(1, 0, 1)
 
         # 清屏
         try:
@@ -186,7 +182,7 @@ class BMFont:
                         x,
                         y,
                         alpha_color,
-                        palette_cache,
+                        palette,
                     )
                 else:
                     display.blit(
@@ -199,22 +195,23 @@ class BMFont:
                         x,
                         y,
                         alpha_color,
-                        palette_cache,
+                        palette,
                     )
             elif color_type == 1:
                 if font_resize:
                     display.blit(
                         framebuf.FrameBuffer(
-                            self._rgb565_font_size(
-                                bitmap_cache, font_size, palette, self.font_size
+                            self._hlsb_font_size(
+                                bitmap_cache, font_size, self.font_size
                             ),
                             font_size,
                             font_size,
-                            framebuf.RGB565,
+                            framebuf.MONO_HLSB,
                         ),
                         x,
                         y,
                         alpha_color,
+                        palette,
                     )
                 else:
                     display.blit(
@@ -224,7 +221,7 @@ class BMFont:
                         x,
                         y,
                         alpha_color,
-                        palette_cache,
+                        palette,
                     )
 
             # 英文字符半格显示
@@ -300,24 +297,6 @@ class BMFont:
                     << (7 - _row % 8)
                 )
         return _temp
-
-    # @timed_function
-    def _rgb565_font_size(
-        self, byte_data: bytearray, new_size: int, palette: list, old_size: int
-    ) -> bytearray:
-        scale = new_size / old_size
-        _temp = []
-        _new_index = -1
-        for _col in range(new_size):
-            col_factor = int(_col / scale) * old_size
-            for _row in range(new_size):
-                if (_row % 8) == 0:
-                    _new_index += 1
-                _old_index = col_factor + int(_row / scale)
-                _temp.extend(
-                    palette[byte_data[_old_index // 8] >> (7 - _old_index % 8) & 1]
-                )
-        return bytearray(_temp)
 
     # @micropython.native
     # @timed_function
