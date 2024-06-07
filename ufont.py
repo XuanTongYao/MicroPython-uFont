@@ -104,27 +104,11 @@ class BMFont:
         # 记录初始的 x 位置
         initial_x = x
 
-        # 调色板
-        palette = None
-        # 设置颜色类型
+        # 自动判断颜色类型
         if color_type == -1 and (width * height) > len(display.buffer):
-            # 自动判断颜色类型
             color_type = 0
-        elif color_type == -1 or color_type == 1:
-            palette = framebuf.FrameBuffer(bytearray(4), 2, 1, framebuf.RGB565)
-            palette.pixel(0, 0, bg_color)
-            palette.pixel(1, 0, color)
+        elif color_type == -1:
             color_type = 1
-
-        # 处理黑白屏幕的背景反转问题
-        if color_type == 0 and color == 0 != bg_color or color_type == 0 and reverse:
-            # 背景反转(反色)直接反转调色板的颜色就行
-            palette = framebuf.FrameBuffer(bytearray(2), 2, 1, framebuf.MONO_HLSB)
-            palette.pixel(0, 0, 1)
-            alpha_color = -1
-        elif color_type == 0:
-            palette = framebuf.FrameBuffer(bytearray(2), 2, 1, framebuf.MONO_HLSB)
-            palette.pixel(1, 0, 1)
 
         # 清屏
         try:
@@ -136,6 +120,28 @@ class BMFont:
         bitmap_cache = self.bitmap_cache or bytearray(
             ceil(self.font_size * self.font_size / 8)
         )
+
+        # 构建调色板
+        if color_type == 0:
+            palette = framebuf.FrameBuffer(bytearray(2), 2, 1, framebuf.MONO_HLSB)
+            # 处理黑白屏幕背景反转(反色)，反转调色板的颜色即可
+            if reverse or color == 0 != bg_color:
+                palette.pixel(0, 0, 1)
+                alpha_color = -1
+            else:
+                palette.pixel(1, 0, 1)
+        else:
+            palette = framebuf.FrameBuffer(bytearray(4), 2, 1, framebuf.RGB565)
+            palette.pixel(0, 0, bg_color)
+            palette.pixel(1, 0, color)
+
+        # 构建FrameBuffer
+        # 给放缩模式提前构建FrameBuffer并不会提升速度
+        # 因为显示文字前需要擦除原有内容，重新申请一块内存速度更快
+        if not font_resize:
+            framebuf_ = framebuf.FrameBuffer(
+                bitmap_cache, font_size, font_size, framebuf.MONO_HLSB
+            )
 
         for char in string:
             if auto_wrap and (
@@ -168,61 +174,24 @@ class BMFont:
             #   2. 黑白屏幕/无放缩
             #   3. 彩色屏幕/放缩
             #   4. 彩色屏幕/无放缩
-            if color_type == 0:
-                if font_resize:
-                    display.blit(
-                        framebuf.FrameBuffer(
-                            self._hlsb_font_size(
-                                bitmap_cache, font_size, self.font_size
-                            ),
-                            font_size,
-                            font_size,
-                            framebuf.MONO_HLSB,
-                        ),
-                        x,
-                        y,
-                        alpha_color,
-                        palette,
-                    )
-                else:
-                    display.blit(
-                        framebuf.FrameBuffer(
-                            bitmap_cache,
-                            font_size,
-                            font_size,
-                            framebuf.MONO_HLSB,
-                        ),
-                        x,
-                        y,
-                        alpha_color,
-                        palette,
-                    )
-            elif color_type == 1:
-                if font_resize:
-                    display.blit(
-                        framebuf.FrameBuffer(
-                            self._hlsb_font_size(
-                                bitmap_cache, font_size, self.font_size
-                            ),
-                            font_size,
-                            font_size,
-                            framebuf.MONO_HLSB,
-                        ),
-                        x,
-                        y,
-                        alpha_color,
-                        palette,
-                    )
-                else:
-                    display.blit(
-                        framebuf.FrameBuffer(
-                            bitmap_cache, font_size, font_size, framebuf.MONO_HLSB
-                        ),
-                        x,
-                        y,
-                        alpha_color,
-                        palette,
-                    )
+
+            # 由于颜色参数提前决定了调色板
+            # 这里按照放缩/无放缩进行显示即可
+            if font_resize:
+                display.blit(
+                    framebuf.FrameBuffer(
+                        self._hlsb_font_size(bitmap_cache, font_size, self.font_size),
+                        font_size,
+                        font_size,
+                        framebuf.MONO_HLSB,
+                    ),
+                    x,
+                    y,
+                    alpha_color,
+                    palette,
+                )
+            else:
+                display.blit(framebuf_, x, y, alpha_color, palette)
 
             # 英文字符半格显示
             if half_char and ord(char) < 128:
