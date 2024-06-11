@@ -1,4 +1,5 @@
-#   Github: https://github.com/AntonVanke/MicroPython-uFont
+#   Github: https://github.com/XuanTongYao/MicroPython-uFont
+#   Github_upstream: https://github.com/AntonVanke/MicroPython-uFont
 #   Gitee: https://gitee.com/liio/MicroPython-uFont
 #   Tools: https://github.com/AntonVanke/MicroPython-ufont-Tools
 #   Videos:
