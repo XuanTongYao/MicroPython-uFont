@@ -212,6 +212,10 @@ class BMFont:
         Returns:
         """
         word_code = ord(word)
+        # 超出范围直接返回
+        if not (self.font_begin <= word_code <= self.font_end):
+            return -1
+        font = self.font
         start = 0x10
         end = self.start_bitmap
         if self.enable_block_index:
@@ -236,9 +240,9 @@ class BMFont:
                     start = mid + 1
         else:
             while start <= end:
-                mid = ((start + end) // 4) * 2
-                self.font.seek(mid, 0)
-                target_code = struct.unpack(">H", self.font.read(2))[0]
+                mid = ((start + end) >> 2) * 2
+                font.seek(mid, 0)
+                target_code = struct.unpack(">H", font.read(2))[0]
                 if word_code == target_code:
                     return (mid - 0x10) >> 1
                 elif word_code < target_code:
@@ -248,6 +252,7 @@ class BMFont:
         return -1
 
     # @timed_function
+    @micropython.native
     def _hlsb_font_size(
         self, byte_data: bytearray, new_size: int, old_size: int
     ) -> bytearray:
@@ -258,16 +263,16 @@ class BMFont:
         for _col in range(new_size):
             col_factor = int(_col / scale) * old_size
             for _row in range(new_size):
-                if (_row % 8) == 0:
+                new_bit_index = _row % 8
+                if new_bit_index == 0:
                     _new_index += 1
                 _old_index = col_factor + int(_row / scale)
                 _temp[_new_index] = _temp[_new_index] | (
                     (byte_data[_old_index >> 3] >> (7 - _old_index % 8) & 1)
-                    << (7 - _row % 8)
+                    << (7 - new_bit_index)
                 )
         return _temp
 
-    # @micropython.native
     # @timed_function
     def fast_get_bitmap(self, word: str, buff: bytearray):
         """获取点阵数据"""
@@ -345,6 +350,12 @@ class BMFont:
             self.FontIndexCache = struct.unpack(
                 f">{word_num}H", self.font.read(self.start_bitmap - 16)
             )
+
+        # 缓存字体空间范围
+        self.font.seek(0x10, 0)
+        self.font_begin = struct.unpack(">H", self.font.read(2))[0]
+        self.font.seek(self.start_bitmap - 2, 0)
+        self.font_end = struct.unpack(">H", self.font.read(2))[0]
 
         # 分块初始化
         self.enable_block_index = enable_block_index
