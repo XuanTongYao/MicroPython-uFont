@@ -316,10 +316,6 @@ class ST7789_Compatibility(framebuf.FrameBuffer):
 
 [MicroPython-uFont-Tools/如何生成点阵字体文件.md at master · AntonVanke/MicroPython-uFont-Tools · GitHub](https://github.com/AntonVanke/MicroPython-uFont-Tools/blob/master/doc/如何生成点阵字体文件.md)
 
-### GITEE
-
-[MicroPython-uFont-Tools: MicroPython uFont 工具 (gitee.com)](https://gitee.com/liio/MicroPython-uFont-Tools)
-
 ## 更多信息
 
 ### VIDEOS
@@ -327,7 +323,7 @@ class ST7789_Compatibility(framebuf.FrameBuffer):
 1. [MicroPython 中文字库教程\_哔哩哔哩\_bilibili](https://www.bilibili.com/video/BV12B4y1B7Ff/)
 2. [MicroPython 中文字库：自定义字体生成\_哔哩哔哩\_bilibili](https://www.bilibili.com/video/BV1YD4y16739/)
 
-### GITEE
+### GITEE(暂无权限)
 
 [MicroPython-Chinese-Font: MicroPython 的中文字库，使 MicroPython 能够显示中文 当然，不止能够显示中文，还可以显示所有 Unicode 字符 (gitee.com)](https://gitee.com/liio/MicroPython-Chinese-Font)
 

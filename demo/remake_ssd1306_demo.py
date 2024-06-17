@@ -37,7 +37,7 @@ font = ufont.BMFont("./unifont-14-12917-16.v3.bmf")
 
 wait(
     """
-# The easiest way to display “Hello”
+# The easiest way to display "Hello"
 #   where `show=True` is specified to keep the screen up-to-date
 """,
     6,
