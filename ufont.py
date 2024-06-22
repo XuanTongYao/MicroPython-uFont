@@ -31,6 +31,12 @@ BLOCK_CYRILLIC_E = const(0x052F)
 BLOCK_CJK_B = const(0x4E00)
 BLOCK_CJK_E = const(0x9FFF)
 
+UNICODE_BLOCK_RANGE = [
+    (BLOCK_LATIN_B, BLOCK_LATIN_E),
+    (BLOCK_CYRILLIC_B, BLOCK_CYRILLIC_E),
+    (BLOCK_CJK_B, BLOCK_CJK_E),
+]
+
 
 def timed_function(f, *args, **kwargs):
     """测试函数运行时间"""
@@ -120,9 +126,7 @@ class BMFont:
             print("请自行调用 display.fill() 清屏")
 
         # 点阵缓存
-        bitmap_cache = self.bitmap_cache or bytearray(
-            ceil(self.font_size * self.font_size / 8)
-        )
+        bitmap_cache = self.bitmap_cache
 
         # 构建调色板
         if color_type == 0:
@@ -172,12 +176,6 @@ class BMFont:
             # 获取字体的点阵数据
             self.fast_get_bitmap(char, bitmap_cache)
 
-            # 分四种情况逐个优化
-            #   1. 黑白屏幕/放缩
-            #   2. 黑白屏幕/无放缩
-            #   3. 彩色屏幕/放缩
-            #   4. 彩色屏幕/无放缩
-
             # 由于颜色参数提前决定了调色板
             # 这里按照放缩/无放缩进行显示即可
             if font_resize:
@@ -222,9 +220,9 @@ class BMFont:
         font = self.font
         start = HEADER_LEN
         end = self.start_bitmap
-        if self.enable_block_index:
-            for i, begin_end in enumerate(self.unicode_block_boundary):
-                if begin_end[0] <= word_code <= begin_end[1] and self.block_boundary[i]:
+        if not self.load_into_mem:
+            for i, (b, e) in enumerate(UNICODE_BLOCK_RANGE):
+                if b <= word_code <= e and self.block_boundary[i] is not None:
                     start, end = self.block_boundary[i]
                     break
 
@@ -280,48 +278,53 @@ class BMFont:
     # @timed_function
     def fast_get_bitmap(self, word: str, buff: bytearray):
         """获取点阵数据"""
-        if self.load_in_mem:
+        if self.load_into_mem:
             bitmap = self.all_font_data.get(ord(word), None)
             if bitmap is None:
+                print("未找到字符：", word)
                 buff[0:32] = (
                     b"\xff\xff\xff\xff\xff\xff\xff\xff\xf0\x0f\xcf\xf3\xcf\xf3\xff\xf3\xff\xcf\xff?\xff?\xff\xff\xff"
                     b"?\xff?\xff\xff\xff\xff"
                 )
                 return
-
             buff[0 : self.bitmap_size] = bitmap
 
         else:
-            index = self._fast_get_index(word)
+            index_cache_size = self.index_cache_size
+            if index_cache_size > 0:
+                index = self.index_cache.get(ord(word), None)
+            else:
+                index = None
+            index = self._fast_get_index(word) if index is None else index
             if index == -1:
+                print("未找到字符：", word)
                 buff[0:32] = (
                     b"\xff\xff\xff\xff\xff\xff\xff\xff\xf0\x0f\xcf\xf3\xcf\xf3\xff\xf3\xff\xcf\xff?\xff?\xff\xff\xff"
                     b"?\xff?\xff\xff\xff\xff"
                 )
                 return
-
+            if index_cache_size > 0 and len(self.index_cache) <= index_cache_size:
+                self.index_cache[ord(word)] = index
             self.font.seek(self.start_bitmap + index * self.bitmap_size, 0)
             self.font.readinto(buff)
 
     def close_file(self):
-        """关闭文件流。！！！在退出程序时必须手动调用"""
+        """关闭文件流。！！！在退出程序前必须手动调用"""
         self.font.close()
 
     def __init__(
         self,
         font_file,
         enable_mem_index=False,
-        enable_block_index=False,
-        enable_bitmap_cache=False,
-        load_in_mem=False,
+        index_cache_size=20,
+        load_into_mem=False,
     ):
         """
         Args:
             font_file: 字体文件路径
             enable_mem_index: 启用内存索引，将索引信息全部载入内存，更快速，每个索引2字节，内存小的机器慎用
-            enable_block_index: 启用分块索引，根据unicode区段，先进行分块，初始化时间较长
-            enable_bitmap_cache: 启用点阵缓存，在类成员中申请bytearray对象，避免频繁创建
-            load_in_mem: 载入全部字体数据到内存，如果开启则忽略内存索引和分块索引，内存小的机器慎用
+            index_cache_size: 索引缓存大小，将常用字索引保存，为0则不启用，
+            load_in_mem: 载入全部字体数据到内存，如果开启则忽略内存索引、分块索引、索引缓存，内存小的机器慎用
 
         """
         self.font_file = font_file
@@ -356,28 +359,25 @@ class BMFont:
         # 用来定位字体数据位置
         self.bitmap_size = self.bmf_info[8]
 
-        # 缓存字体空间范围
+        # 查询字体空间范围
         self.font_begin = struct.unpack(">H", self.font.read(2))[0]
         self.font.seek(self.start_bitmap - 2, 0)
         self.font_end = struct.unpack(">H", self.font.read(2))[0]
         word_num = (self.start_bitmap - HEADER_LEN) // 2
 
         # 点阵数据缓存
-        if enable_bitmap_cache:
-            self.bitmap_cache = bytearray(ceil(self.font_size * self.font_size / 8))
-        else:
-            self.bitmap_cache = None
+        self.bitmap_cache = bytearray(ceil(self.font_size * self.font_size / 8))
 
         # 全部数据载入内存
         self.font.seek(HEADER_LEN, 0)
-        self.load_in_mem = load_in_mem
-        if load_in_mem:
+        self.load_into_mem = load_into_mem
+        if load_into_mem:
             # 存储全部字体数据
             self.all_font_data: dict[int, bytes] = {}
-            for i in range(word_num):
-                self.font.seek(HEADER_LEN + i * 2, 0)
+            for word_index in range(word_num):
+                self.font.seek(HEADER_LEN + word_index * 2, 0)
                 word_code = struct.unpack(">H", self.font.read(2))[0]
-                self.font.seek(self.start_bitmap + i * self.bitmap_size, 0)
+                self.font.seek(self.start_bitmap + word_index * self.bitmap_size, 0)
                 data = self.font.read(self.bitmap_size)
                 self.all_font_data[word_code] = data
             gc.collect()
@@ -390,50 +390,49 @@ class BMFont:
                 f">{word_num}H", self.font.read(self.start_bitmap - HEADER_LEN)
             )
 
-        # 分块初始化
-        self.enable_block_index = enable_block_index
-        if enable_block_index:
-            self.block_boundary: list = list(None for _ in range(3))
-            self.unicode_block_boundary = (
-                (BLOCK_LATIN_B, BLOCK_LATIN_E),
-                (BLOCK_CYRILLIC_B, BLOCK_CYRILLIC_E),
-                (BLOCK_CJK_B, BLOCK_CJK_E),
-            )
-            bb = self.unicode_block_boundary
-            len_bb = len(bb)
-            self.font.seek(HEADER_LEN, 0)
-            len_ = 1000
-            not_eof = True
-            block = 0
-            find_start = False
-            start, end = 0, 0
+        # 建立索引缓存
+        self.index_cache_size = index_cache_size
+        if index_cache_size > 0:
+            self.index_cache = {}
 
-            while not_eof:
-                if len_ + self.font.tell() > self.start_bitmap:
-                    len_ = self.start_bitmap - self.font.tell()
+        # 建立分块索引
+        self.block_boundary: list = [None for _ in range(3)]
+        font = self.font
+        block_num = len(UNICODE_BLOCK_RANGE)
+        font.seek(HEADER_LEN, 0)
+        len_ = 1000
+        not_eof = True
+        block = 0
+        find_start = False
+        start, end = 0, 0
+        while not_eof:
+            if len_ + font.tell() > self.start_bitmap:
+                len_ = self.start_bitmap - font.tell()
+                not_eof = False
+            tmp = struct.unpack(f">{len_//2}H", font.read(len_))
+            word_index = 0
+            for word_code in tmp:
+                # 注意：字体文件索引空间是线性的
+                # 第一次满足分块 就记录此时索引为分块起始索引
+                # 直到找到不满足分块的 记录索引为分块结束索引，然后找到其他分块的索引
+                for i, (b, e) in enumerate(UNICODE_BLOCK_RANGE):
+                    if b <= word_code <= e:
+                        if find_start:
+                            break
+                        else:
+                            block = i
+                            find_start = True
+                            start = font.tell() - len_ + (word_index * 2)
+                            break
+                    elif find_start and i == block:
+                        end = font.tell() - len_ + (word_index * 2)
+                        find_start = False
+                        self.block_boundary[block] = (start, end)
+
+                if block == block_num:
                     not_eof = False
-                tmp = struct.unpack(f">{len_//2}H", self.font.read(len_))
-                for i, word_code in enumerate(tmp):
-                    # 注意：字体文件索引空间是线性的
-                    # 第一次满足分块 就记录此时索引为分块起始索引
-                    # 直到找到不满足分块的 记录索引为分块结束索引，然后找到其他分块的索引
-                    for j, (b, e) in enumerate(bb):
-                        if b <= word_code <= e:
-                            if find_start:
-                                break
-                            else:
-                                block = j
-                                find_start = True
-                                start = self.font.tell() - len_ + (i * 2)
-                                break
-                        elif find_start and j == block:
-                            end = self.font.tell() - len_ + (i * 2)
-                            find_start = False
-                            self.block_boundary[block] = (start, end)
-
-                    if block == len_bb:
-                        not_eof = False
-                        break
-            if find_start:
-                self.block_boundary[block] = (start, self.start_bitmap)
+                    break
+                word_index += 1
+        if find_start:
+            self.block_boundary[block] = (start, self.start_bitmap)
         gc.collect()
