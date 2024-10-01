@@ -1,3 +1,28 @@
+"""
+MIT License
+
+Copyright (c) 2024 XuanTongYao
+Copyright (c) 2022 AntonVanke
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
 #   Github: https://github.com/XuanTongYao/MicroPython-uFont
 #   Github_upstream: https://github.com/AntonVanke/MicroPython-uFont
 #   Gitee: https://gitee.com/liio/MicroPython-uFont
@@ -16,26 +41,26 @@ from math import ceil
 DEBUG = True
 
 # 字体文件头长度
-HEADER_LEN = const(0x10)
+_HEADER_LEN = const(0x10)
 
 # 索引分块(起始与结束)
 # 拉丁字母
-BLOCK_LATIN_B = const(0)
-BLOCK_LATIN_E = const(0x024F)
+_BLOCK_LATIN_B = const(0)
+_BLOCK_LATIN_E = const(0x024F)
 
 # 西里尔字母
-BLOCK_CYRILLIC_B = const(0x0400)
-BLOCK_CYRILLIC_E = const(0x052F)
+_BLOCK_CYRILLIC_B = const(0x0400)
+_BLOCK_CYRILLIC_E = const(0x052F)
 
 # 中日韩统一表意文字
-BLOCK_CJK_B = const(0x4E00)
-BLOCK_CJK_E = const(0x9FFF)
+_BLOCK_CJK_B = const(0x4E00)
+_BLOCK_CJK_E = const(0x9FFF)
 
-UNICODE_BLOCK_RANGE = [
-    (BLOCK_LATIN_B, BLOCK_LATIN_E),
-    (BLOCK_CYRILLIC_B, BLOCK_CYRILLIC_E),
-    (BLOCK_CJK_B, BLOCK_CJK_E),
-]
+_UNICODE_BLOCK_RANGE = (
+    (_BLOCK_LATIN_B, _BLOCK_LATIN_E),
+    (_BLOCK_CYRILLIC_B, _BLOCK_CYRILLIC_E),
+    (_BLOCK_CJK_B, _BLOCK_CJK_E),
+)
 
 
 def timed_function(f, *args, **kwargs):
@@ -166,7 +191,7 @@ class BMFont:
             elif char == "\t":
                 x = ((x // font_size) + 1) * font_size + initial_x % font_size
                 continue
-            elif ord(char) < 16:
+            elif ord(char) < 0x20:
                 continue
 
             # 超过范围的字符不会显示*
@@ -218,10 +243,10 @@ class BMFont:
         if not (self.font_begin <= word_code <= self.font_end):
             return -1
         font = self.font
-        start = HEADER_LEN
+        start = _HEADER_LEN
         end = self.start_bitmap
         if not self.load_into_mem:
-            for i, (b, e) in enumerate(UNICODE_BLOCK_RANGE):
+            for i, (b, e) in enumerate(_UNICODE_BLOCK_RANGE):
                 if b <= word_code <= e and self.block_boundary[i] is not None:
                     start, end = self.block_boundary[i]
                     break
@@ -229,8 +254,8 @@ class BMFont:
         # 二分法查询
         if self.enable_mem_index:
             cache = self.FontIndexCache
-            start = (start - HEADER_LEN) // 2
-            end = (end - HEADER_LEN) // 2
+            start = (start - _HEADER_LEN) // 2
+            end = (end - _HEADER_LEN) // 2
             while start <= end:
                 mid = (start + end) >> 1
                 target_code = cache[mid]
@@ -246,7 +271,7 @@ class BMFont:
                 font.seek(mid, 0)
                 target_code = struct.unpack(">H", font.read(2))[0]
                 if word_code == target_code:
-                    return (mid - HEADER_LEN) >> 1
+                    return (mid - _HEADER_LEN) >> 1
                 elif word_code < target_code:
                     end = mid - 2
                 else:
@@ -254,7 +279,7 @@ class BMFont:
         return -1
 
     # @timed_function
-    @micropython.native
+    # @micropython.native
     def _hlsb_font_size(
         self, byte_data: bytearray, new_size: int, old_size: int
     ) -> bytearray:
@@ -282,29 +307,23 @@ class BMFont:
             bitmap = self.all_font_data.get(ord(word), None)
             if bitmap is None:
                 print("未找到字符：", word)
-                buff[0:32] = (
-                    b"\xff\xff\xff\xff\xff\xff\xff\xff\xf0\x0f\xcf\xf3\xcf\xf3\xff\xf3\xff\xcf\xff?\xff?\xff\xff\xff"
-                    b"?\xff?\xff\xff\xff\xff"
-                )
+                # 这里不要使用固定长度数据，可能引起buff大小变化
+                # 字体缺失生成一个实心像素块
+                for i in range(len(buff)):
+                    buff[i] = 0xFF
                 return
-            buff[0 : self.bitmap_size] = bitmap
-
-        else:
-            index_cache_size = self.index_cache_size
-            if index_cache_size > 0:
-                index = self.index_cache.get(ord(word), None)
+            if len(buff) < self.bitmap_size:
+                buff[:] = bitmap[: len(buff)]
             else:
-                index = None
-            index = self._fast_get_index(word) if index is None else index
+                buff[: self.bitmap_size] = bitmap
+        else:
+            index = self._fast_get_index(word)
             if index == -1:
                 print("未找到字符：", word)
-                buff[0:32] = (
-                    b"\xff\xff\xff\xff\xff\xff\xff\xff\xf0\x0f\xcf\xf3\xcf\xf3\xff\xf3\xff\xcf\xff?\xff?\xff\xff\xff"
-                    b"?\xff?\xff\xff\xff\xff"
-                )
+                for i in range(len(buff)):
+                    buff[i] = 0xFF
                 return
-            if index_cache_size > 0 and len(self.index_cache) <= index_cache_size:
-                self.index_cache[ord(word)] = index
+
             self.font.seek(self.start_bitmap + index * self.bitmap_size, 0)
             self.font.readinto(buff)
 
@@ -316,7 +335,6 @@ class BMFont:
         self,
         font_file,
         enable_mem_index=False,
-        index_cache_size=20,
         load_into_mem=False,
     ):
         """
@@ -339,7 +357,7 @@ class BMFont:
         #       1 byte 字号
         #       1 byte 单字点阵字节大小
         #       7 byte 保留
-        self.bmf_info = self.font.read(HEADER_LEN)
+        self.bmf_info = self.font.read(_HEADER_LEN)
 
         # 判断字体是否正确
         #   文件头和常用的图像格式 BMP 相同，需要添加版本验证来辅助验证
@@ -363,19 +381,19 @@ class BMFont:
         self.font_begin = struct.unpack(">H", self.font.read(2))[0]
         self.font.seek(self.start_bitmap - 2, 0)
         self.font_end = struct.unpack(">H", self.font.read(2))[0]
-        word_num = (self.start_bitmap - HEADER_LEN) // 2
+        word_num = (self.start_bitmap - _HEADER_LEN) // 2
 
         # 点阵数据缓存
-        self.bitmap_cache = bytearray(ceil(self.font_size * self.font_size / 8))
+        self.bitmap_cache = bytearray(ceil(self.font_size / 8) * self.font_size)
 
         # 全部数据载入内存
-        self.font.seek(HEADER_LEN, 0)
+        self.font.seek(_HEADER_LEN, 0)
         self.load_into_mem = load_into_mem
         if load_into_mem:
             # 存储全部字体数据
             self.all_font_data: dict[int, bytes] = {}
             for word_index in range(word_num):
-                self.font.seek(HEADER_LEN + word_index * 2, 0)
+                self.font.seek(_HEADER_LEN + word_index * 2, 0)
                 word_code = struct.unpack(">H", self.font.read(2))[0]
                 self.font.seek(self.start_bitmap + word_index * self.bitmap_size, 0)
                 data = self.font.read(self.bitmap_size)
@@ -387,19 +405,14 @@ class BMFont:
         self.enable_mem_index = enable_mem_index
         if enable_mem_index:
             self.FontIndexCache = struct.unpack(
-                f">{word_num}H", self.font.read(self.start_bitmap - HEADER_LEN)
+                f">{word_num}H", self.font.read(self.start_bitmap - _HEADER_LEN)
             )
-
-        # 建立索引缓存
-        self.index_cache_size = index_cache_size
-        if index_cache_size > 0:
-            self.index_cache = {}
 
         # 建立分块索引
         self.block_boundary: list = [None for _ in range(3)]
         font = self.font
-        block_num = len(UNICODE_BLOCK_RANGE)
-        font.seek(HEADER_LEN, 0)
+        block_num = len(_UNICODE_BLOCK_RANGE)
+        font.seek(_HEADER_LEN, 0)
         len_ = 1000
         not_eof = True
         block = 0
@@ -415,7 +428,7 @@ class BMFont:
                 # 注意：字体文件索引空间是线性的
                 # 第一次满足分块 就记录此时索引为分块起始索引
                 # 直到找到不满足分块的 记录索引为分块结束索引，然后找到其他分块的索引
-                for i, (b, e) in enumerate(UNICODE_BLOCK_RANGE):
+                for i, (b, e) in enumerate(_UNICODE_BLOCK_RANGE):
                     if b <= word_code <= e:
                         if find_start:
                             break
