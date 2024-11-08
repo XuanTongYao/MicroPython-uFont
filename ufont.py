@@ -87,7 +87,7 @@ def timed_function(f, *args, **kwargs):
 class BMFont:
 
     @micropython.native
-    @timed_function
+    # @timed_function
     def text(
         self,
         display,
@@ -206,7 +206,9 @@ class BMFont:
             if font_resize:
                 display.blit(
                     framebuf.FrameBuffer(
-                        self._hlsb_font_size(bitmap_cache, font_size, self.font_size),
+                        self._fast_bitmap_resize(
+                            bitmap_cache, font_size, self.font_size
+                        ),
                         font_size,
                         font_size,
                         framebuf.MONO_HLSB,
@@ -278,14 +280,18 @@ class BMFont:
                     start = mid + 2
         return -1
 
-    # @timed_function
+    # 速度太慢了
+    # Demo典型耗时45ms
     # @micropython.native
+    # @timed_function
     def _hlsb_font_size(
         self, byte_data: bytearray, new_size: int, old_size: int
     ) -> bytearray:
         # 缩放比例进行反向处理是为了利用浮点乘法提高性能
         scale_inverted = old_size / new_size
+        # 不理解原作者这个地方使用更长bytearray的用意
         _temp = bytearray(new_size * ((new_size >> 3) + 1))
+        # _temp = bytearray(ceil(new_size / 8) * new_size)
         _new_index = -1
         for _col in range(new_size):
             col_factor = int(_col * scale_inverted) * old_size
@@ -299,6 +305,70 @@ class BMFont:
                     << (7 - new_bit_index)
                 )
         return _temp
+
+    # 更快速的邻近插值缩放算法
+    # 缩放比为整数倍时可以极大提高速度
+    # Demo典型耗时33ms
+    # 整数倍放大Demo典型耗时6ms
+    # 挨个处理像素太慢了，需要使用矩阵算法提高速度
+    # @timed_function
+    def _fast_bitmap_resize(
+        self, byte_data: bytearray, new_size: int, old_size: int
+    ) -> bytearray:
+        new_bitmap = bytearray(ceil(new_size / 8) * new_size)
+        len_ = len(byte_data)
+        if (new_size % old_size) == 0 and new_size > old_size:
+            scale = new_size // old_size
+            row_bytes = ceil(old_size / 8)
+            alignment = 8 * row_bytes - old_size
+            new_row_bytes = ceil(new_size / 8)
+            new_row = 0
+            for offset in range(0, len_, row_bytes):
+                # 拿到原始二进制数据
+                row_data = (
+                    int.from_bytes(byte_data[offset : offset + row_bytes], "big")
+                    >> alignment
+                )
+                # 扩散
+                new_row_data_prototype = 0
+                for col in range(old_size):
+                    if (row_data & (0x01 << (old_size - col - 1))) != 0:
+                        new_row_data_prototype |= 0x01 << (new_size - 1 - (col * scale))
+                new_row_data = 0
+                # 列插值
+                for repeat in range(scale):
+                    new_row_data |= new_row_data_prototype >> (repeat)
+                # 行插值
+                for _ in range(scale):
+                    new_offset = new_row * new_row_bytes
+                    new_bitmap[new_offset : new_offset + new_row_bytes] = (
+                        new_row_data.to_bytes(new_row_bytes, "big")
+                    )
+                    new_row += 1
+
+        else:
+            row_bytes = ceil(old_size / 8)
+            alignment = 8 * row_bytes - old_size
+            binary_data = [
+                int.from_bytes(byte_data[offset : offset + row_bytes], "big")
+                >> alignment
+                for offset in range(0, len_, row_bytes)
+            ]
+
+            scale = old_size / new_size
+            new_row_bytes = ceil(new_size / 8)
+            for new_y in range(new_size):
+                old_y = int(new_y * scale)
+                new_row_data = 0
+                offset = new_y * new_row_bytes
+                for new_x in range(new_size):
+                    old_x = int(new_x * scale)
+                    bit_value = (binary_data[old_y] >> (old_size - 1 - old_x)) & 1
+                    new_row_data = (new_row_data << 1) | bit_value
+                new_bitmap[offset : offset + new_row_bytes] = new_row_data.to_bytes(
+                    new_row_bytes, "big"
+                )
+        return new_bitmap
 
     # @timed_function
     def fast_get_bitmap(self, word: str, buff: bytearray):

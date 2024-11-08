@@ -18,9 +18,12 @@ Micropython 的字体模块，可以用来显示 UTF16 编码的`Unicode`字符�
 
 该方法不会改变主机的文件系统，但运行速度很慢。
 
+本人已经去 micropython 的仓库提 issue 了，现版本的 mpremote 应该支持显示 Unicode 字符了。
+如果显示Unicode会崩溃的话，请把print中的内容都换成ASCII字符。
+
 1. 准备运行`micropython`的开发板和一个`SSD1306`的`OLED`屏幕，并完成连接
 2. 克隆或下载仓库到 PC 机本地
-3. 打开`demo/remake_ssd1306_demo.py`
+3. 打开`demos/remake_ssd1306_demo.py`
 
    ```python
    # 请修改为对应引脚
@@ -29,20 +32,20 @@ Micropython 的字体模块，可以用来显示 UTF16 编码的`Unicode`字符�
 
 4. 下载官方的 [mpremote](https://docs.micropython.org/en/latest/reference/mpremote.html#mpremote) 工具`pip3 install mpremote`
 5. 挂载代码目录到主机(请确保运行命令时路径处于代码目录，串口不被其他程序占用)`mpremote mount .`
-6. 运行简单演示`>>> import demo.remake_ssd1306_demo.py`
+6. 运行简单演示`>>> import demos.remake_ssd1306_demo.py`
 
 ### 安装
 
 1. 准备运行`micropython`的开发板和一个`SSD1306`的`OLED`屏幕，并完成连接
 2. 克隆或下载仓库到 PC 机本地
-3. 将`demo/ssd1306_demo.py`用编辑器打开
+3. 将`demos/ssd1306_demo.py`用编辑器打开
 
    ```python
    # 修改为对应的 Pin
    i2c = I2C(scl=Pin(2), sda=Pin(3)) # Line 29
    ```
 
-4. 依次将`demo/ssd1306_demo.py`、`driver/ssd1306.py`、`ufont.py`、`unifont-14-12917-16.v3.bmf`上传到**开发板根目录**，运行`ssd1306_demo.py`即可
+4. 依次将`demos/ssd1306_demo.py`、`drivers/ssd1306.py`、`ufont.py`、`16x16ForDemos.bmf`上传到**开发板根目录**，运行`ssd1306_demo.py`即可
 
 ## 使用方法
 
@@ -121,194 +124,6 @@ class ST7789_Compatibility(framebuf.FrameBuffer):
     def show(self):
         self.st7789.write_gddram(self.buffer)
 ```
-
-## 示例程序
-
-1. `SSD1306`演示程序
-
-   ```python
-   """
-   SSD1306(OLED 128*64) 屏幕中文测试
-   Micropython版本: 1.19.1
-   演示硬件:
-       SSD1306(OLED 128*64 IIC)
-       合宙ESP32C3(without ch343)
-   所需文件:
-       ufont.py
-       unifont-14-12917-16.v3.bmf
-       ssd1306.py
-   链接引脚:
-       SCL = 2
-       SDA = 3
-   使用字体: unifont-14-12917-16.v3.bmf
-   """
-   import random
-   import time
-
-   from machine import I2C, Pin
-
-   import ufont
-   import ssd1306
-
-
-   def wait(info, _t=5):
-       print(info)
-       time.sleep(_t)
-
-
-   i2c = I2C(scl=Pin(2), sda=Pin(3))
-   display = ssd1306.SSD1306_I2C(128, 64, i2c)
-
-   # 载入字体
-   #   使用字体制作工具：https://github.com/AntonVanke/MicroPython_BitMap_Tools
-   font = ufont.BMFont("unifont-14-12917-16.v3.bmf")
-
-   wait("""
-   # 最简单的显示 "你好"
-   #   其中指定 `show=True` 使得屏幕及时更新
-   """, 6)
-   font.text(display, "你好", 0, 0, show=True)
-
-   wait("""
-   # 如果想让文字显示在屏幕正中间，可以通过指定文本左上角位置来修改显示位置
-   """, 5)
-   font.text(display, "你好", 48, 16, show=True)
-
-   wait("""
-   # 此时你会发现：上一次显示显示的文字不会消失。因为你没有指定清屏参数：`clear=True`;让我们再试一次
-   #   注意，请使用修改后的 `ssd1306.py` 驱动，否则请自行调用`display.fill(0)`
-   """, 10)
-   font.text(display, "你好", 48, 16, show=True, clear=True)
-
-   wait("""
-   # 显示英文呢？
-   """, 3)
-   font.text(display, "He110", 48, 8, show=True, clear=True)
-   font.text(display, "你好", 48, 24, show=True)
-
-   wait("""
-   # 会发现一个汉字的宽度大概是字母的两倍，如果你需要等宽，可以指定参数 `half_char=False`
-   """, 6)
-   font.text(display, "HELLO", 32, 16, show=True, clear=True, half_char=False)
-
-   wait("""
-   # 显示的文字如果很长，会超出屏幕边界，例如：
-   """, 3)
-   poem = "他日若遂凌云志，敢笑黄巢不丈夫!"
-   font.text(display, poem, 0, 8, show=True, clear=True)
-
-   wait("""
-   # 此时，需要指定参数 `auto_wrap=True` 来自动换行
-   """, 5)
-   font.text(display, poem, 0, 8, show=True, clear=True, auto_wrap=True)
-
-   wait("""
-   # 自动换行的行间距太小了？
-   #   添加 `line_spacing: int` 参数来调整行间距, 此处指定 8 个像素
-   """, 8)
-   font.text(display, poem, 0, 8, show=True, clear=True, auto_wrap=True, line_spacing=8)
-
-   wait("""
-   # 调整字体大小，可以指定 `font_size: int` 参数
-   #   注意：这会严重增加运行时间
-   """, 8)
-   font.text(display, "T:" + str(random.randint(-40, 40)) + "℃", 24, 8, font_size=32, show=True, clear=True)
-
-   wait("""
-   # 当你使用墨水屏时，颜色可能会出现反转。或者你主动想要颜色反转
-   #   可以指定参数 `reverse=Ture`
-   """, 8)
-   font.text(display, "T:" + str(random.randint(-40, 40)) + "℃", 24, 8, font_size=32, show=True, clear=True, reverse=True)
-
-   ```
-
-2. `ST7735`演示程序
-
-   ```python
-   """
-   ST7735(LCD 160*80) 屏幕中文测试
-   Micropython版本: 1.19.1
-   演示硬件:
-       合宙 Air10x 系列屏幕扩展板
-       合宙ESP32C3(without ch343)
-   所需文件:
-       ufont.py
-       unifont-14-12917-16.v3.bmf
-       st7735.py
-   链接引脚:
-       SCL = 2
-       SDA = 3
-       RST = 10
-       DC  = 6
-       CS  = 7
-       BL  = 11
-   使用字体: unifont-14-12917-16.v3.bmf
-   """
-   import random
-   import time
-
-   from machine import SPI, Pin
-
-   import ufont
-   from st7735 import ST7735
-
-   spi = SPI(1, 30000000, sck=Pin(2), mosi=Pin(3))
-   display = ST7735(spi=spi, cs=7, dc=6, rst=10, bl=11, width=160, height=80, rotate=1)
-
-
-   def wait(info, _t=5):
-       print(info)
-       time.sleep(_t)
-
-
-   # 载入字体
-   #   使用字体制作工具：https://github.com/AntonVanke/MicroPython_BitMap_Tools
-   font = ufont.BMFont("unifont-14-12917-16.v3.bmf")
-
-   wait("""
-   # 最简单的显示 "你好"
-   #   其中指定 `show=True` 使得屏幕及时更新
-   """, 6)
-   font.text(display, "你好", 0, 0, show=True)
-
-   wait("""
-   # 如果想让文字显示在屏幕正中间，可以通过指定文本左上角位置来修改显示位置
-   """, 5)
-   font.text(display, "你好", 64, 32, show=True)
-
-   wait("""
-   # 此时你会发现：上一次显示显示的文字不会消失。因为你没有指定清屏参数：`clear=True`;让我们再试一次
-   """, 6)
-   font.text(display, "你好", 64, 32, show=True, clear=True)
-
-   wait("""
-   # 显示英文呢？
-   """, 3)
-   font.text(display, "He110", 64, 26, show=True, clear=True)
-   font.text(display, "你好", 64, 42, show=True)
-
-   wait("""
-   # 会发现一个汉字的宽度大概是字母的两倍，如果你需要等宽，可以指定参数 `half_char=False`
-   """, 6)
-   font.text(display, "HELLO", 48, 24, show=True, clear=True, half_char=False)
-
-   wait("""
-   # 可以通过指定参数 `color` 来指定字体颜色，其中 color 是 RGB565 格式
-   """, 6)
-   font.text(display, "hello", 48, 32, color=0xff00, show=True)
-
-   wait("""
-   # 同样，我们可以通过指定 `bg_color` 参数调整背景颜色
-   """)
-   font.text(display, "你好", 56, 28, color=0xff00, bg_color=0x00ff, show=True)
-
-   wait("""
-   # 大一点？可以使用 `font_size` 指定字号大小
-   #   注意：放大彩色字体对内存的要求十分巨大
-   """)
-   font.text(display, "Temp: 15℃", 0, 26, font_size=32, color=0xff00, bg_color=0x00ff, show=True, clear=True)
-
-   ```
 
 ## 字体制作工具
 
