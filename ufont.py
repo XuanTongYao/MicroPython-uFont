@@ -36,9 +36,21 @@ import utime
 import struct
 import gc
 import framebuf, micropython
-from math import ceil
+
+
+# 这是一种更高效的整数向上取整除法
+# 避免浮点数误差和浮点运算开销
+def ceildiv(a: int, b: int):
+    return -(a // -b)
+
 
 DEBUG = True
+
+_TAB_CODE = const(0x09)
+_LF_CODE = const(0x0A)
+_SPACE_CODE = const(0x20)
+_MIN_PRINTABLE_CODE = const(0x20)
+_MAX_ASCII = const(0x7F)
 
 # 字体文件头长度
 _HEADER_LEN = const(0x10)
@@ -86,8 +98,8 @@ def timed_function(f, *args, **kwargs):
 
 class BMFont:
 
-    @micropython.native
     # @timed_function
+    @micropython.native
     def text(
         self,
         display,
@@ -132,6 +144,7 @@ class BMFont:
 
         # 如果没有指定字号则使用默认字号
         font_size = self.font_size if font_size is None else font_size
+        half_size = font_size // 2
         # 与默认字号不同的字号将引发放缩
         font_resize = font_size != self.font_size
         # 记录初始的 x 位置
@@ -151,7 +164,11 @@ class BMFont:
             print("请自行调用 display.fill() 清屏")
 
         # 点阵缓存
-        bitmap_cache = self.bitmap_cache
+        bitmap_cache = (
+            bytearray(ceildiv(self.font_size, 8) * self.font_size)
+            if self.bitmap_cache is None
+            else self.bitmap_cache
+        )
 
         # 构建调色板
         if color_type == 0:
@@ -175,23 +192,23 @@ class BMFont:
                 bitmap_cache, font_size, font_size, framebuf.MONO_HLSB
             )
 
-        for char in string:
+        for code in map(ord, string):
             if auto_wrap and (
-                (x + font_size // 2 > width and ord(char) < 128 and half_char)
-                or (x + font_size > width and (not half_char or ord(char) > 128))
+                (half_char and code < _MAX_ASCII and x + half_size > width)
+                or ((not half_char or code > _MAX_ASCII) and x + font_size > width)
             ):
                 y += font_size + line_spacing
                 x = initial_x
 
             # 对控制字符的处理
-            if char == "\n":
+            if code == _LF_CODE:
                 y += font_size + line_spacing
                 x = initial_x
                 continue
-            elif char == "\t":
+            elif code == _TAB_CODE:
                 x = ((x // font_size) + 1) * font_size + initial_x % font_size
                 continue
-            elif ord(char) < 0x20:
+            elif code < _MIN_PRINTABLE_CODE:
                 continue
 
             # 超过范围的字符不会显示*
@@ -199,7 +216,7 @@ class BMFont:
                 continue
 
             # 获取字体的点阵数据
-            self.fast_get_bitmap(char, bitmap_cache)
+            self.fast_get_bitmap(code, bitmap_cache)
 
             # 由于颜色参数提前决定了调色板
             # 这里按照放缩/无放缩进行显示即可
@@ -222,48 +239,47 @@ class BMFont:
                 display.blit(framebuf_, x, y, alpha_color, palette)
 
             # 英文字符半格显示
-            if half_char and ord(char) < 128:
-                x += font_size >> 1
+            if half_char and code < _MAX_ASCII:
+                x += half_size
             else:
                 x += font_size
 
         display.show() if show else 0
 
     # @micropython.native
-    # @timed_function
-    def _fast_get_index(self, word: str) -> int:
+    @timed_function
+    def _fast_get_index(self, code: int) -> int:
         """
         获取索引，利用分块加速二分收敛速度
         Args:
-            word: 字符
+            code: 字符码点
 
         Returns:
             字符在字体文件中的索引，如果未找到则返回 -1
         """
-        word_code = ord(word)
         # 超出范围直接返回
-        if not (self.font_begin <= word_code <= self.font_end):
+        if not (self.font_begin <= code <= self.font_end):
             return -1
         font = self.font
         start = _HEADER_LEN
         end = self.start_bitmap
         if not self.load_into_mem:
             for i, (b, e) in enumerate(_UNICODE_BLOCK_RANGE):
-                if b <= word_code <= e and self.block_boundary[i] is not None:
+                if b <= code <= e and self.block_boundary[i] is not None:
                     start, end = self.block_boundary[i]
                     break
 
         # 二分法查询
         if self.enable_mem_index:
-            cache = self.FontIndexCache
+            cache = self.font_index_cache
             start = (start - _HEADER_LEN) // 2
             end = (end - _HEADER_LEN) // 2
             while start <= end:
                 mid = (start + end) >> 1
                 target_code = cache[mid]
-                if word_code == target_code:
+                if code == target_code:
                     return mid
-                elif word_code < target_code:
+                elif code < target_code:
                     end = mid - 1
                 else:
                     start = mid + 1
@@ -272,12 +288,13 @@ class BMFont:
                 mid = ((start + end) >> 2) * 2
                 font.seek(mid, 0)
                 target_code = struct.unpack(">H", font.read(2))[0]
-                if word_code == target_code:
-                    return (mid - _HEADER_LEN) >> 1
-                elif word_code < target_code:
+                if code < target_code:
                     end = mid - 2
-                else:
+                elif code > target_code:
                     start = mid + 2
+                else:
+                    return (mid - _HEADER_LEN) >> 1
+
         return -1
 
     # 速度太慢了
@@ -309,74 +326,77 @@ class BMFont:
     # 更快速的邻近插值缩放算法
     # 缩放比为整数倍时可以极大提高速度
     # Demo典型耗时33ms
+    # 再次优化后13.1ms
     # 整数倍放大Demo典型耗时6ms
-    # 挨个处理像素太慢了，需要使用矩阵算法提高速度
+    # 整数倍放大 (假设scale=2)
+    # 版本1(6ms): 先扩散bit 0b101->0b10_00_10 然后移位插值 0b11_00_11 最后复制到相应行
+    # 版本2(4.5ms): 求放大掩码 0b11 插值 0b11_00_11 最后复制到相应行
+    # 挨个处理像素太慢了，需要使用向量矩阵算法提高速度
     # @timed_function
     def _fast_bitmap_resize(
         self, byte_data: bytearray, new_size: int, old_size: int
     ) -> bytearray:
-        new_bitmap = bytearray(ceil(new_size / 8) * new_size)
         len_ = len(byte_data)
+        row_bytes = ceildiv(old_size, 8)
+        new_row_bytes = ceildiv(new_size, 8)
+        alignment = 8 * row_bytes - old_size
+        realignment = 8 * new_row_bytes - new_size  # 还要再对齐回来
+        new_bitmap = bytearray(new_row_bytes * new_size)
+        # 拿到原始二进制数据
+        binary_data = [
+            int.from_bytes(byte_data[offset : offset + row_bytes], "big") >> alignment
+            for offset in range(0, len_, row_bytes)
+        ]
+        new_offset = 0
         if (new_size % old_size) == 0 and new_size > old_size:
             scale = new_size // old_size
-            row_bytes = ceil(old_size / 8)
-            alignment = 8 * row_bytes - old_size
-            new_row_bytes = ceil(new_size / 8)
-            new_row = 0
-            for offset in range(0, len_, row_bytes):
-                # 拿到原始二进制数据
-                row_data = (
-                    int.from_bytes(byte_data[offset : offset + row_bytes], "big")
-                    >> alignment
-                )
-                # 扩散
-                new_row_data_prototype = 0
-                for col in range(old_size):
-                    if (row_data & (0x01 << (old_size - col - 1))) != 0:
-                        new_row_data_prototype |= 0x01 << (new_size - 1 - (col * scale))
-                new_row_data = 0
-                # 列插值
-                for repeat in range(scale):
-                    new_row_data |= new_row_data_prototype >> (repeat)
-                # 行插值
-                for _ in range(scale):
-                    new_offset = new_row * new_row_bytes
-                    new_bitmap[new_offset : new_offset + new_row_bytes] = (
-                        new_row_data.to_bytes(new_row_bytes, "big")
-                    )
-                    new_row += 1
-
-        else:
-            row_bytes = ceil(old_size / 8)
-            alignment = 8 * row_bytes - old_size
-            binary_data = [
-                int.from_bytes(byte_data[offset : offset + row_bytes], "big")
-                >> alignment
-                for offset in range(0, len_, row_bytes)
+            scale_mask = (0x01 << scale) - 1
+            bitmask_shift = [
+                (0x01 << reversed_col, reversed_col * scale)
+                for reversed_col in reversed(range(old_size))
             ]
-
-            scale = old_size / new_size
-            new_row_bytes = ceil(new_size / 8)
-            for new_y in range(new_size):
-                old_y = int(new_y * scale)
+            for row_data in binary_data:
+                # 列插值
                 new_row_data = 0
-                offset = new_y * new_row_bytes
-                for new_x in range(new_size):
-                    old_x = int(new_x * scale)
-                    bit_value = (binary_data[old_y] >> (old_size - 1 - old_x)) & 1
-                    new_row_data = (new_row_data << 1) | bit_value
-                new_bitmap[offset : offset + new_row_bytes] = new_row_data.to_bytes(
+                for mask, shift in bitmask_shift:
+                    if (row_data & mask) != 0:
+                        new_row_data |= scale_mask << shift
+                new_row_data = (new_row_data << realignment).to_bytes(
                     new_row_bytes, "big"
                 )
+                # 行插值
+                for _ in range(scale):
+                    new_bitmap[new_offset : new_offset + new_row_bytes] = new_row_data
+                    new_offset += new_row_bytes
+        else:
+            # 定点数放大1024倍，不会真的有人需要缩放1024多倍吧🤔，应该不用担心精度问题。
+            scale_fixed = int((old_size << 10) / new_size)  # 定点数放大 1024 倍
+
+            old_xy_indices = [(new_x * scale_fixed) >> 10 for new_x in range(new_size)]
+            mask_table = [old_size - 1 - x for x in range(old_size)]
+            for old_y in old_xy_indices:
+                new_row_data = 0
+                row_data = binary_data[old_y]
+                for old_x in old_xy_indices:
+                    bit_value = (row_data >> mask_table[old_x]) & 1
+                    new_row_data = (new_row_data << 1) | bit_value
+                new_bitmap[new_offset : new_offset + new_row_bytes] = (
+                    new_row_data << realignment
+                ).to_bytes(new_row_bytes, "big")
+                new_offset += new_row_bytes
         return new_bitmap
 
     # @timed_function
-    def fast_get_bitmap(self, word: str, buff: bytearray):
-        """获取点阵数据"""
+    def fast_get_bitmap(self, code: int, buff: bytearray):
+        """获取点阵数据
+
+        Args:
+            code: 字符对应码点，使用ord(str)得到.
+        """
         if self.load_into_mem:
-            bitmap = self.all_font_data.get(ord(word), None)
+            bitmap = self.all_font_data.get(code, None)
             if bitmap is None:
-                print("未找到字符：", word)
+                print("未找到字符: ", code)
                 # 这里不要使用固定长度数据，可能引起buff大小变化
                 # 字体缺失生成一个实心像素块
                 for i in range(len(buff)):
@@ -387,9 +407,9 @@ class BMFont:
             else:
                 buff[: self.bitmap_size] = bitmap
         else:
-            index = self._fast_get_index(word)
+            index = self._fast_get_index(code)
             if index == -1:
-                print("未找到字符：", word)
+                print("未找到字符: ", code)
                 for i in range(len(buff)):
                     buff[i] = 0xFF
                 return
@@ -403,15 +423,16 @@ class BMFont:
 
     def __init__(
         self,
-        font_file,
+        font_file: str,
         enable_mem_index=False,
+        enable_bitmap_cache=True,
         load_into_mem=False,
     ):
         """
         Args:
             font_file: 字体文件路径
             enable_mem_index: 启用内存索引，将索引信息全部载入内存，更快速，每个索引2字节，内存小的机器慎用
-            index_cache_size: 索引缓存大小，将常用字索引保存，为0则不启用，
+            enable_bitmap_cache: 启用点阵缓存，在类成员中申请bytearray对象，避免频繁创建
             load_in_mem: 载入全部字体数据到内存，如果开启则忽略内存索引、分块索引、索引缓存，内存小的机器慎用
 
         """
@@ -454,7 +475,10 @@ class BMFont:
         word_num = (self.start_bitmap - _HEADER_LEN) // 2
 
         # 点阵数据缓存
-        self.bitmap_cache = bytearray(ceil(self.font_size / 8) * self.font_size)
+        if enable_bitmap_cache:
+            self.bitmap_cache = bytearray(ceildiv(self.font_size, 8) * self.font_size)
+        else:
+            self.bitmap_cache = None
 
         # 全部数据载入内存
         self.font.seek(_HEADER_LEN, 0)
@@ -474,7 +498,7 @@ class BMFont:
         # 建立内存索引
         self.enable_mem_index = enable_mem_index
         if enable_mem_index:
-            self.FontIndexCache = struct.unpack(
+            self.font_index_cache = struct.unpack(
                 f">{word_num}H", self.font.read(self.start_bitmap - _HEADER_LEN)
             )
 
